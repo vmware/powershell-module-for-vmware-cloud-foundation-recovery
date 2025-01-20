@@ -3620,8 +3620,7 @@ Function New-RebuiltVsanDatastore {
     $datastoreName = ($extractedSddcData.workloadDomains.vsphereClusterDetails | Where-Object { $_.name -eq $clusterName }).primaryDatastoreName
     $datastoreType = ($extractedSddcData.workloadDomains.vsphereClusterDetails | Where-Object { $_.name -eq $clusterName }).primaryDatastoreType
 
-    If ($datastoreType -in "VSAN","VSAN_ESA","VSAN_MAX")
-    {
+    If ($datastoreType -in "VSAN", "VSAN_ESA", "VSAN_MAX") {
         LogMessage -type INFO -message "[$jumpboxName] Connecting to Restored vCenter: $vCenterFQDN"
         $restoredvCenterConnection = Connect-ViServer $vCenterFQDN -user $vCenterAdmin -password $vCenterAdminPassword
         If ($datastoreType -eq "VSAN") {
@@ -3805,10 +3804,8 @@ Function New-RebuiltVsanDatastore {
             LogMessage -type INFO -message "[$clusterName] Renaming new datastore to original name: $datastoreName"
             Get-Cluster -name $clusterName | Get-Datastore -Name "vsanDatastore*" | Set-Datastore -Name $datastoreName | Out-Null
         }
-    }
-    else
-    {
-        LogMessage -type NOTE -message "[$clusterName] No vSAN datastore was present on this cluster"
+    } else {
+        LogMessage -type NOTE -message "[$clusterName] No hosted vSAN datastores were found to rebuild"
     }
     LogMessage -type NOTE -message "[$jumpboxName] Completed Task $($MyInvocation.MyCommand)"
 }
