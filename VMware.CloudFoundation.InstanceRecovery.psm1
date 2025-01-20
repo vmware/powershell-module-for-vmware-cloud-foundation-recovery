@@ -3620,190 +3620,250 @@ Function New-RebuiltVsanDatastore {
     $datastoreName = ($extractedSddcData.workloadDomains.vsphereClusterDetails | Where-Object { $_.name -eq $clusterName }).primaryDatastoreName
     $datastoreType = ($extractedSddcData.workloadDomains.vsphereClusterDetails | Where-Object { $_.name -eq $clusterName }).primaryDatastoreType
 
-    LogMessage -type INFO -message "[$jumpboxName] Connecting to Restored vCenter: $vCenterFQDN"
-    $restoredvCenterConnection = Connect-ViServer $vCenterFQDN -user $vCenterAdmin -password $vCenterAdminPassword
-    If ($datastoreType -ne "VSAN_ESA") {
-        $vmhosts = (Get-Cluster -name $clusterName | Get-VMHost | Sort-Object -property Name)
-        LogMessage -type INFO -message "[$($vmhosts[0].name)] Using host as reference for Eligible Physical Disks"
+    If ($datastoreType -in "VSAN","VSAN_ESA","VSAN_MAX")
+    {
+        LogMessage -type INFO -message "[$jumpboxName] Connecting to Restored vCenter: $vCenterFQDN"
+        $restoredvCenterConnection = Connect-ViServer $vCenterFQDN -user $vCenterAdmin -password $vCenterAdminPassword
+        If ($datastoreType -eq "VSAN") {
+            $vmhosts = (Get-Cluster -name $clusterName | Get-VMHost | Sort-Object -property Name)
+            LogMessage -type INFO -message "[$($vmhosts[0].name)] Using host as reference for Eligible Physical Disks"
 
-        $disks = ((Get-Cluster -name $clusterName | Get-VMHost | Sort-Object -property Name)[0] | Get-VMHostDisk) | Where-Object { $_.ScsiLun.VsanStatus -eq 'Eligible' } | Sort-Object -Property @{e = { $_.scsilun.runtimename } }
-        $disksDisplayObject = @()
-        $disksIndex = 1
-        $disksDisplayObject += [pscustomobject]@{
-            'ID'            = "ID"
-            'canonicalName' = "Canonical Name"
-            'size'          = "Size (GB)"
-            'ssd'           = "SSD"
-            'scsiLun'       = "SCSI LUN ID"
-        }
-        $disksDisplayObject += [pscustomobject]@{
-            'ID'            = "--"
-            'canonicalName' = "--------------------"
-            'size'          = "-------------"
-            'ssd'           = "------"
-            'scsiLun'       = "-------------"
-        }
-        Foreach ($disk in $disks) {
-            If ($disk.ScsiLun.CapacityGB -ne $null) {
-                $disksDisplayObject += [pscustomobject]@{
-                    'ID'            = $disksIndex
-                    'canonicalName' = $disk.ScsiLun.CanonicalName
-                    'size'          = $disk.ScsiLun.CapacityGB
-                    'ssd'           = $disk.ScsiLun.IsSsd
-                    'scsiLun'       = $disk.ScsiLun.RuntimeName
-                }
-                $disksIndex++
+            $disks = ((Get-Cluster -name $clusterName | Get-VMHost | Sort-Object -property Name)[0] | Get-VMHostDisk) | Where-Object { $_.ScsiLun.VsanStatus -eq 'Eligible' } | Sort-Object -Property @{e = { $_.scsilun.runtimename } }
+            $disksDisplayObject = @()
+            $disksIndex = 1
+            $disksDisplayObject += [pscustomobject]@{
+                'ID'            = "ID"
+                'canonicalName' = "Canonical Name"
+                'size'          = "Size (GB)"
+                'ssd'           = "SSD"
+                'scsiLun'       = "SCSI LUN ID"
             }
-        }
+            $disksDisplayObject += [pscustomobject]@{
+                'ID'            = "--"
+                'canonicalName' = "--------------------"
+                'size'          = "-------------"
+                'ssd'           = "------"
+                'scsiLun'       = "-------------"
+            }
+            Foreach ($disk in $disks) {
+                If ($disk.ScsiLun.CapacityGB -ne $null) {
+                    $disksDisplayObject += [pscustomobject]@{
+                        'ID'            = $disksIndex
+                        'canonicalName' = $disk.ScsiLun.CanonicalName
+                        'size'          = $disk.ScsiLun.CapacityGB
+                        'ssd'           = $disk.ScsiLun.IsSsd
+                        'scsiLun'       = $disk.ScsiLun.RuntimeName
+                    }
+                    $disksIndex++
+                }
+            }
 
-        $diskGroupConfiguration = @()
-        $remainingDisksDisplayObject = $disksDisplayObject
-        Write-Host ""; $remainingDisksDisplayObject | format-table -Property @{Expression = " " }, id, canonicalName, size, ssd, scsiLun -autosize -HideTableHeaders | Out-String | ForEach-Object { $_.Trim("`r", "`n") }
-        Do {
-            Write-Host ""; Write-Host " Enter the desired number of disk groups to create (between 1 and 5), or C to Cancel: " -ForegroundColor Yellow -nonewline
-            $diskGroupNumber = Read-Host
-        } Until (($diskGroupNumber -in "1", "2", "3", "4", "5") -or ($diskGroupNumber -eq "C"))
-        If ($diskGroupNumber -eq "C") { Break }
+            $diskGroupConfiguration = @()
+            $remainingDisksDisplayObject = $disksDisplayObject
+            Write-Host ""; $remainingDisksDisplayObject | format-table -Property @{Expression = " " }, id, canonicalName, size, ssd, scsiLun -autosize -HideTableHeaders | Out-String | ForEach-Object { $_.Trim("`r", "`n") }
+            Do {
+                Write-Host ""; Write-Host " Enter the desired number of disk groups to create (between 1 and 5), or C to Cancel: " -ForegroundColor Yellow -nonewline
+                $diskGroupNumber = Read-Host
+            } Until (($diskGroupNumber -in "1", "2", "3", "4", "5") -or ($diskGroupNumber -eq "C"))
+            If ($diskGroupNumber -eq "C") { Break }
 
-        #Loop Through Disk Group Creation
-        For ($i = 1; $i -le $diskGroupNumber; $i++) {
-            If ($i -gt 1) {
+            #Loop Through Disk Group Creation
+            For ($i = 1; $i -le $diskGroupNumber; $i++) {
+                If ($i -gt 1) {
+                    Write-Host ""; $remainingDisksDisplayObject | format-table -Property @{Expression = " " }, id, canonicalName, size, ssd -autosize -HideTableHeaders | Out-String | ForEach-Object { $_.Trim("`r", "`n") }
+                }
+                Do {
+                    If ($i -gt 1) { Write-Host "" }; Write-Host " Enter the ID of disk to use as Cache Disk for Disk Group $i, or C to Cancel: " -ForegroundColor Yellow -nonewline
+                    $cacheDiskSelection = Read-Host
+                } Until (($cacheDiskSelection -in $remainingDisksDisplayObject.id) -OR ($cacheDiskSelection -eq "c"))
+                If ($cacheDiskSelection -eq "c") { Break }
+                $tempRemainingDisksDisplayObject = @()
+                Foreach ( $displayDisk in $remainingDisksDisplayObject) {
+                    If ($displayDisk.id -ne $cacheDiskSelection) {
+                        $tempRemainingDisksDisplayObject += $displayDisk
+                    }
+                }
+                $remainingDisksDisplayObject = $tempRemainingDisksDisplayObject
                 Write-Host ""; $remainingDisksDisplayObject | format-table -Property @{Expression = " " }, id, canonicalName, size, ssd -autosize -HideTableHeaders | Out-String | ForEach-Object { $_.Trim("`r", "`n") }
-            }
-            Do {
-                If ($i -gt 1) { Write-Host "" }; Write-Host " Enter the ID of disk to use as Cache Disk for Disk Group $i, or C to Cancel: " -ForegroundColor Yellow -nonewline
-                $cacheDiskSelection = Read-Host
-            } Until (($cacheDiskSelection -in $remainingDisksDisplayObject.id) -OR ($cacheDiskSelection -eq "c"))
-            If ($cacheDiskSelection -eq "c") { Break }
-            $tempRemainingDisksDisplayObject = @()
-            Foreach ( $displayDisk in $remainingDisksDisplayObject) {
-                If ($displayDisk.id -ne $cacheDiskSelection) {
-                    $tempRemainingDisksDisplayObject += $displayDisk
-                }
-            }
-            $remainingDisksDisplayObject = $tempRemainingDisksDisplayObject
-            Write-Host ""; $remainingDisksDisplayObject | format-table -Property @{Expression = " " }, id, canonicalName, size, ssd -autosize -HideTableHeaders | Out-String | ForEach-Object { $_.Trim("`r", "`n") }
-            Do {
-                Write-Host ""; Write-Host " Enter a comma seperated list of IDs to be used as Capacity Disks for Disk Group $i, or C to Cancel: " -ForegroundColor Yellow -nonewline
-                $capacityDiskSelection = Read-Host
-                If ($capacityDiskSelection -ne "C") {
-                    $capacityDiskSelectionInvalid = $false
-                    $capacityDiskArray = $capacityDiskSelection -split (",")
-                    Foreach ($capacityDisk in $capacityDiskArray) {
-                        If ($capacityDisk -notin $disksDisplayObject.id) {
-                            $capacityDiskSelectionInvalid = $true
-                        }
-                    }
-                }
-            } Until (($capacityDiskSelectionInvalid -eq $false) -OR ($capacityDiskSelection -eq "c"))
-            If ($capacityDiskSelection -eq "c") { Break }
-            $diskGroupConfiguration += [PSCustomObject]@{
-                'cacheDiskID'     = $cacheDiskSelection
-                'capacityDiskIDs' = $capacityDiskArray
-            }
-            $tempRemainingDisksDisplayObject = @()
-            Foreach ( $displayDisk in $remainingDisksDisplayObject) {
-                If ($displayDisk.id -notin $capacityDiskArray) {
-                    $tempRemainingDisksDisplayObject += $displayDisk
-                }
-            }
-            $remainingDisksDisplayObject = $tempRemainingDisksDisplayObject
-        }
-        If (($cacheDiskSelection -eq "c") -or ($capacityDiskSelection -eq "c")) { Break }
-
-        $proposedConfigDisplayObject = @()
-        $configIndex = 1
-        $proposedConfigDisplayObject += [pscustomobject]@{
-            'diskGroup'         = "Disk Group"
-            'cacheDiskID'       = "Cache Disk ID"
-            'cacheDiskCN'       = "Cache Disk Canonical Name"
-            'cacheDiskCapacity' = "Cache Disk (GB)"
-            'capacityDiskIDs'   = "Capacity Disk IDs"
-            'capacityCNs'       = "Capacity Disk Canonical Names"
-            'capacityDiskSize'  = "Capacity Disks (GB)"
-        }
-        $proposedConfigDisplayObject += [pscustomobject]@{
-            'diskGroup'         = "----------"
-            'cacheDiskID'       = "-------------"
-            'cacheDiskCN'       = "-------------------------"
-            'cacheDiskCapacity' = "---------------"
-            'capacityDiskIDs'   = "-----------------"
-            'capacityCNs'       = "----------------------------------------"
-            'capacityDiskSize'  = "-------------------"
-        }
-        Foreach ($config in $diskGroupConfiguration) {
-            $proposedConfigDisplayObject += [pscustomobject]@{
-                'diskGroup'         = $configIndex
-                'cacheDiskID'       = $config.cacheDiskID
-                'cacheDiskCN'       = ($disksDisplayObject | Where-Object { $_.id -eq $config.cacheDiskID }).canonicalName
-                'cacheDiskCapacity' = ($disksDisplayObject | Where-Object { $_.id -eq $config.cacheDiskID }).size
-                'capacityDiskIDs'   = $config.capacityDiskIDs -join (", ")
-                'capacityCNs'       = (($disksDisplayObject | Where-Object { $_.id -in $config.capacityDiskIDs }).canonicalName) -join (", ")
-                'capacityDiskSize'  = (($disksDisplayObject | Where-Object { $_.id -in $config.capacityDiskIDs }).size) -join (", ")
-            }
-            $configIndex++
-        }
-        Write-Host ""; Write-Host " Proposed Disk Group Configuration " -ForegroundColor Yellow
-        Write-Host ""; $proposedConfigDisplayObject | format-table -Property @{Expression = " " }, diskGroup, cacheDiskID, cacheDiskCN, cacheDiskCapacity, capacityDiskIDs, capacityCNs, capacityDiskSize -autosize -HideTableHeaders | Out-String | ForEach-Object { $_.Trim("`r", "`n") }
-        Write-Host ""; Write-Host " Do you wish to proceed with the proposed configuration? (Y/N): " -ForegroundColor Yellow -nonewline
-        $proposedConfigAccepted = Read-Host
-        $proposedConfigAccepted = $proposedConfigAccepted -replace "`t|`n|`r", ""
-        If ($proposedConfigAccepted -eq "Y") {
-            LogMessage -type INFO -message "[$clusterName] Starting Parallel Disk Group Creation across all hosts"
-            Foreach ($vmHost in $vmHosts) {
-                $scriptBlock = {
-                    $moduleFunctions = Import-Module VMware.CloudFoundation.InstanceRecovery -passthru
-                    $restoredvCenterConnection = Connect-ViServer $using:vCenterFQDN -user $using:vCenterAdmin -password $using:vCenterAdminPassword
-                    $vmhost = Get-VMHost -name $using:vmhost.name
-                    $disks = Get-VMHost -name $using:vmhost.name | Get-VMHostDisk | Where-Object { $_.ScsiLun.VsanStatus -eq 'Eligible' } | Sort-Object -Property @{e = { $_.scsilun.runtimename } }
-                    $disksDisplayObject = @()
-                    $disksIndex = 1
-                    $disksDisplayObject += [pscustomobject]@{
-                        'ID'            = "ID"
-                        'canonicalName' = "Canonical Name"
-                        'size'          = "Size (GB)"
-                        'ssd'           = "SSD"
-                        'scsiLun'       = "SCSI LUN ID"
-                    }
-                    $disksDisplayObject += [pscustomobject]@{
-                        'ID'            = "--"
-                        'canonicalName' = "--------------------"
-                        'size'          = "-------------"
-                        'ssd'           = "------"
-                        'scsiLun'       = "-------------"
-                    }
-                    Foreach ($disk in $disks) {
-                        If ($disk.ScsiLun.CapacityGB -ne $null) {
-                            $disksDisplayObject += [pscustomobject]@{
-                                'ID'            = $disksIndex
-                                'canonicalName' = $disk.ScsiLun.CanonicalName
-                                'size'          = $disk.ScsiLun.CapacityGB
-                                'ssd'           = $disk.ScsiLun.IsSsd
-                                'scsiLun'       = $disk.ScsiLun.RuntimeName
+                Do {
+                    Write-Host ""; Write-Host " Enter a comma seperated list of IDs to be used as Capacity Disks for Disk Group $i, or C to Cancel: " -ForegroundColor Yellow -nonewline
+                    $capacityDiskSelection = Read-Host
+                    If ($capacityDiskSelection -ne "C") {
+                        $capacityDiskSelectionInvalid = $false
+                        $capacityDiskArray = $capacityDiskSelection -split (",")
+                        Foreach ($capacityDisk in $capacityDiskArray) {
+                            If ($capacityDisk -notin $disksDisplayObject.id) {
+                                $capacityDiskSelectionInvalid = $true
                             }
-                            $disksIndex++
                         }
                     }
-                    For ($i = 1; $i -le $using:diskGroupNumber; $i++) {
-                        $diskGroupConfigurationIndex = ($i - 1)
-                        $diskGroupConfiguration = $using:diskGroupConfiguration
-                        $cacheDiskCanonicalName = (($disksDisplayObject | Where-Object { $_.id -eq $diskGroupConfiguration[$diskGroupConfigurationIndex].cacheDiskID }).canonicalName)
-                        $capacityDiskCanonicalNames = (($disksDisplayObject | Where-Object { $_.id -in $diskGroupConfiguration[$diskGroupConfigurationIndex].capacityDiskIDs }).canonicalName)
-                        & $moduleFunctions { LogMessage -type INFO -message "[$($vmhost.name)] Creating VSAN Disk Group $i" }
-                        New-VsanDiskGroup -VMHost $vmhost -SsdCanonicalName $cacheDiskCanonicalName -DataDiskCanonicalName $capacityDiskCanonicalNames | Out-Null
-                    }
-                    Disconnect-VIServer -Server $global:DefaultVIServers -Force -Confirm:$false
+                } Until (($capacityDiskSelectionInvalid -eq $false) -OR ($capacityDiskSelection -eq "c"))
+                If ($capacityDiskSelection -eq "c") { Break }
+                $diskGroupConfiguration += [PSCustomObject]@{
+                    'cacheDiskID'     = $cacheDiskSelection
+                    'capacityDiskIDs' = $capacityDiskArray
                 }
-                Start-Job -scriptblock $scriptBlock -ArgumentList ($diskGroupNumber, $diskGroupConfiguration, $vmhost, $vCenterFQDN, $vCenterAdmin, $vCenterAdminPassword) | Out-Null
+                $tempRemainingDisksDisplayObject = @()
+                Foreach ( $displayDisk in $remainingDisksDisplayObject) {
+                    If ($displayDisk.id -notin $capacityDiskArray) {
+                        $tempRemainingDisksDisplayObject += $displayDisk
+                    }
+                }
+                $remainingDisksDisplayObject = $tempRemainingDisksDisplayObject
             }
-            Get-Job | Receive-Job -Wait -AutoRemoveJob
+            If (($cacheDiskSelection -eq "c") -or ($capacityDiskSelection -eq "c")) { Break }
+
+            $proposedConfigDisplayObject = @()
+            $configIndex = 1
+            $proposedConfigDisplayObject += [pscustomobject]@{
+                'diskGroup'         = "Disk Group"
+                'cacheDiskID'       = "Cache Disk ID"
+                'cacheDiskCN'       = "Cache Disk Canonical Name"
+                'cacheDiskCapacity' = "Cache Disk (GB)"
+                'capacityDiskIDs'   = "Capacity Disk IDs"
+                'capacityCNs'       = "Capacity Disk Canonical Names"
+                'capacityDiskSize'  = "Capacity Disks (GB)"
+            }
+            $proposedConfigDisplayObject += [pscustomobject]@{
+                'diskGroup'         = "----------"
+                'cacheDiskID'       = "-------------"
+                'cacheDiskCN'       = "-------------------------"
+                'cacheDiskCapacity' = "---------------"
+                'capacityDiskIDs'   = "-----------------"
+                'capacityCNs'       = "----------------------------------------"
+                'capacityDiskSize'  = "-------------------"
+            }
+            Foreach ($config in $diskGroupConfiguration) {
+                $proposedConfigDisplayObject += [pscustomobject]@{
+                    'diskGroup'         = $configIndex
+                    'cacheDiskID'       = $config.cacheDiskID
+                    'cacheDiskCN'       = ($disksDisplayObject | Where-Object { $_.id -eq $config.cacheDiskID }).canonicalName
+                    'cacheDiskCapacity' = ($disksDisplayObject | Where-Object { $_.id -eq $config.cacheDiskID }).size
+                    'capacityDiskIDs'   = $config.capacityDiskIDs -join (", ")
+                    'capacityCNs'       = (($disksDisplayObject | Where-Object { $_.id -in $config.capacityDiskIDs }).canonicalName) -join (", ")
+                    'capacityDiskSize'  = (($disksDisplayObject | Where-Object { $_.id -in $config.capacityDiskIDs }).size) -join (", ")
+                }
+                $configIndex++
+            }
+            Write-Host ""; Write-Host " Proposed Disk Group Configuration " -ForegroundColor Yellow
+            Write-Host ""; $proposedConfigDisplayObject | format-table -Property @{Expression = " " }, diskGroup, cacheDiskID, cacheDiskCN, cacheDiskCapacity, capacityDiskIDs, capacityCNs, capacityDiskSize -autosize -HideTableHeaders | Out-String | ForEach-Object { $_.Trim("`r", "`n") }
+            Write-Host ""; Write-Host " Do you wish to proceed with the proposed configuration? (Y/N): " -ForegroundColor Yellow -nonewline
+            $proposedConfigAccepted = Read-Host
+            $proposedConfigAccepted = $proposedConfigAccepted -replace "`t|`n|`r", ""
+            If ($proposedConfigAccepted -eq "Y") {
+                LogMessage -type INFO -message "[$clusterName] Starting Parallel Disk Group Creation across all hosts"
+                Foreach ($vmHost in $vmHosts) {
+                    $scriptBlock = {
+                        $moduleFunctions = Import-Module VMware.CloudFoundation.InstanceRecovery -passthru
+                        $restoredvCenterConnection = Connect-ViServer $using:vCenterFQDN -user $using:vCenterAdmin -password $using:vCenterAdminPassword
+                        $vmhost = Get-VMHost -name $using:vmhost.name
+                        $disks = Get-VMHost -name $using:vmhost.name | Get-VMHostDisk | Where-Object { $_.ScsiLun.VsanStatus -eq 'Eligible' } | Sort-Object -Property @{e = { $_.scsilun.runtimename } }
+                        $disksDisplayObject = @()
+                        $disksIndex = 1
+                        $disksDisplayObject += [pscustomobject]@{
+                            'ID'            = "ID"
+                            'canonicalName' = "Canonical Name"
+                            'size'          = "Size (GB)"
+                            'ssd'           = "SSD"
+                            'scsiLun'       = "SCSI LUN ID"
+                        }
+                        $disksDisplayObject += [pscustomobject]@{
+                            'ID'            = "--"
+                            'canonicalName' = "--------------------"
+                            'size'          = "-------------"
+                            'ssd'           = "------"
+                            'scsiLun'       = "-------------"
+                        }
+                        Foreach ($disk in $disks) {
+                            If ($disk.ScsiLun.CapacityGB -ne $null) {
+                                $disksDisplayObject += [pscustomobject]@{
+                                    'ID'            = $disksIndex
+                                    'canonicalName' = $disk.ScsiLun.CanonicalName
+                                    'size'          = $disk.ScsiLun.CapacityGB
+                                    'ssd'           = $disk.ScsiLun.IsSsd
+                                    'scsiLun'       = $disk.ScsiLun.RuntimeName
+                                }
+                                $disksIndex++
+                            }
+                        }
+                        For ($i = 1; $i -le $using:diskGroupNumber; $i++) {
+                            $diskGroupConfigurationIndex = ($i - 1)
+                            $diskGroupConfiguration = $using:diskGroupConfiguration
+                            $cacheDiskCanonicalName = (($disksDisplayObject | Where-Object { $_.id -eq $diskGroupConfiguration[$diskGroupConfigurationIndex].cacheDiskID }).canonicalName)
+                            $capacityDiskCanonicalNames = (($disksDisplayObject | Where-Object { $_.id -in $diskGroupConfiguration[$diskGroupConfigurationIndex].capacityDiskIDs }).canonicalName)
+                            & $moduleFunctions { LogMessage -type INFO -message "[$($vmhost.name)] Creating VSAN Disk Group $i" }
+                            New-VsanDiskGroup -VMHost $vmhost -SsdCanonicalName $cacheDiskCanonicalName -DataDiskCanonicalName $capacityDiskCanonicalNames | Out-Null
+                        }
+                        Disconnect-VIServer -Server $global:DefaultVIServers -Force -Confirm:$false
+                    }
+                    Start-Job -scriptblock $scriptBlock -ArgumentList ($diskGroupNumber, $diskGroupConfiguration, $vmhost, $vCenterFQDN, $vCenterAdmin, $vCenterAdminPassword) | Out-Null
+                }
+                Get-Job | Receive-Job -Wait -AutoRemoveJob
+            }
+        }
+        If ($datastoreType -in "VSAN", "VSAN_ESA", "VSAN_MAX") {
+            LogMessage -type INFO -message "[$clusterName] Renaming new datastore to original name: $datastoreName"
+            Get-Cluster -name $clusterName | Get-Datastore -Name "vsanDatastore*" | Set-Datastore -Name $datastoreName | Out-Null
         }
     }
-    LogMessage -type INFO -message "[$clusterName] Renaming new datastore to original name: $datastoreName"
-    Get-Cluster -name $clusterName | Get-Datastore -Name "vsanDatastore*" | Set-Datastore -Name $datastoreName | Out-Null
+    else
+    {
+        LogMessage -type NOTE -message "[$clusterName] No vSAN datastore was present on this cluster"
+    }
     LogMessage -type NOTE -message "[$jumpboxName] Completed Task $($MyInvocation.MyCommand)"
 }
 Export-ModuleMember -Function New-RebuiltVsanDatastore
+
+Function New-RemountRemoteVsanDatastore {
+    <#
+    .SYNOPSIS
+    Remounts the previously mounted remote vSAN datastore on a recovered cluster.
+
+    .DESCRIPTION
+    The New-RemountRemoteVsanDatastore cmdlet remounts the previously mounted remote vSAN datastore on a recovered cluster. Should only be done when the remote vSAN cluster has already been recovered.
+
+    .EXAMPLE
+    New-RemountRemoteVsanDatastore -vCenterFQDN "sfo-m01-vc01.sfo.rainpole.io" -vCenterAdmin "administrator@vsphere.local" -vCenterAdminPassword "VMw@re1!" -clusterName "sfo-m01-cl01" -extractedSDDCDataFile ".\extracted-sddc-data.json"
+
+    .PARAMETER vCenterFQDN
+    FQDN of the vCenter instance hosting both the cluster hosting the vSAN Datastore and compute cluster where the vSAN Datastore will be remounted
+
+    .PARAMETER vCenterAdmin
+    Admin user of the vCenter instance hosting both the cluster hosting the vSAN Datastore and compute cluster where the vSAN Datastore will be remounted
+
+    .PARAMETER vCenterAdminPassword
+    Admin password for the vCenter instance hosting both the cluster hosting the vSAN Datastore and compute cluster where the vSAN Datastore will be remounted
+
+    .PARAMETER clusterName
+    Name of the vSphere cluster instance where the vSAN Datastore will be remounted
+
+    .PARAMETER extractedSDDCDataFile
+    Relative or absolute to the extracted-sddc-data.json file (previously created by New-ExtractDataFromSDDCBackup) somewhere on the local filesystem
+    #>
+
+    Param(
+        [Parameter (Mandatory = $true)][String] $vCenterFQDN,
+        [Parameter (Mandatory = $true)][String] $vCenterAdmin,
+        [Parameter (Mandatory = $true)][String] $vCenterAdminPassword,
+        [Parameter (Mandatory = $true)][String] $clusterName,
+        [Parameter (Mandatory = $true)][String] $extractedSDDCDataFile
+    )
+    $jumpboxName = hostname
+    LogMessage -type NOTE -message "[$jumpboxName] Starting Task $($MyInvocation.MyCommand)"
+    LogMessage -type INFO -message "[$jumpboxName] Reading Extracted Data"
+    $extractedDataFilePath = (Resolve-Path -Path $extractedSDDCDataFile).path
+    $extractedSddcData = Get-Content $extractedDataFilePath | ConvertFrom-JSON
+    $datastoreName = ($extractedSddcData.workloadDomains.vsphereClusterDetails | Where-Object { $_.name -eq $clusterName }).primaryDatastoreName
+
+    LogMessage -type INFO -message "[$jumpboxName] Connecting to Restored vCenter: $vCenterFQDN"
+    $restoredvCenterConnection = Connect-ViServer $vCenterFQDN -user $vCenterAdmin -password $vCenterAdminPassword
+
+    LogMessage -type INFO -message "[$clusterName] Getting Existing vSAN configuration"
+    $config = Get-VsanClusterConfiguration -Cluster $clusterName
+    LogMessage -type INFO -message "[$clusterName] Remounting $datastoreName"
+    Set-VsanClusterConfiguration -Configuration $config -MountRemoteDatastore (Get-Datastore -Name $datastoreName)
+}
+Export-ModuleMember -Function New-RemountRemoteVsanDatastore
 
 Function New-RebuiltVdsConfiguration {
     <#
