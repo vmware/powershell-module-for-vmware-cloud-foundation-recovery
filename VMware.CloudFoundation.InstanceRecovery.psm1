@@ -3811,57 +3811,6 @@ Function New-RebuiltVsanDatastore {
 }
 Export-ModuleMember -Function New-RebuiltVsanDatastore
 
-Function New-RemountRemoteVsanDatastore {
-    <#
-    .SYNOPSIS
-    Remounts the previously mounted remote vSAN datastore on a recovered cluster.
-
-    .DESCRIPTION
-    The New-RemountRemoteVsanDatastore cmdlet remounts the previously mounted remote vSAN datastore on a recovered cluster. Should only be done when the remote vSAN cluster has already been recovered.
-
-    .EXAMPLE
-    New-RemountRemoteVsanDatastore -vCenterFQDN "sfo-m01-vc01.sfo.rainpole.io" -vCenterAdmin "administrator@vsphere.local" -vCenterAdminPassword "VMw@re1!" -clusterName "sfo-m01-cl01" -extractedSDDCDataFile ".\extracted-sddc-data.json"
-
-    .PARAMETER vCenterFQDN
-    FQDN of the vCenter instance hosting both the cluster hosting the vSAN Datastore and compute cluster where the vSAN Datastore will be remounted
-
-    .PARAMETER vCenterAdmin
-    Admin user of the vCenter instance hosting both the cluster hosting the vSAN Datastore and compute cluster where the vSAN Datastore will be remounted
-
-    .PARAMETER vCenterAdminPassword
-    Admin password for the vCenter instance hosting both the cluster hosting the vSAN Datastore and compute cluster where the vSAN Datastore will be remounted
-
-    .PARAMETER clusterName
-    Name of the vSphere cluster instance where the vSAN Datastore will be remounted
-
-    .PARAMETER extractedSDDCDataFile
-    Relative or absolute to the extracted-sddc-data.json file (previously created by New-ExtractDataFromSDDCBackup) somewhere on the local filesystem
-    #>
-
-    Param(
-        [Parameter (Mandatory = $true)][String] $vCenterFQDN,
-        [Parameter (Mandatory = $true)][String] $vCenterAdmin,
-        [Parameter (Mandatory = $true)][String] $vCenterAdminPassword,
-        [Parameter (Mandatory = $true)][String] $clusterName,
-        [Parameter (Mandatory = $true)][String] $extractedSDDCDataFile
-    )
-    $jumpboxName = hostname
-    LogMessage -type NOTE -message "[$jumpboxName] Starting Task $($MyInvocation.MyCommand)"
-    LogMessage -type INFO -message "[$jumpboxName] Reading Extracted Data"
-    $extractedDataFilePath = (Resolve-Path -Path $extractedSDDCDataFile).path
-    $extractedSddcData = Get-Content $extractedDataFilePath | ConvertFrom-JSON
-    $datastoreName = ($extractedSddcData.workloadDomains.vsphereClusterDetails | Where-Object { $_.name -eq $clusterName }).primaryDatastoreName
-
-    LogMessage -type INFO -message "[$jumpboxName] Connecting to Restored vCenter: $vCenterFQDN"
-    $restoredvCenterConnection = Connect-ViServer $vCenterFQDN -user $vCenterAdmin -password $vCenterAdminPassword
-
-    LogMessage -type INFO -message "[$clusterName] Getting Existing vSAN configuration"
-    $config = Get-VsanClusterConfiguration -Cluster $clusterName
-    LogMessage -type INFO -message "[$clusterName] Remounting $datastoreName"
-    Set-VsanClusterConfiguration -Configuration $config -MountRemoteDatastore (Get-Datastore -Name $datastoreName)
-}
-Export-ModuleMember -Function New-RemountRemoteVsanDatastore
-
 Function New-RebuiltVdsConfiguration {
     <#
     .SYNOPSIS
