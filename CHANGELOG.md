@@ -2,10 +2,9 @@
 
 ## v1.0.13
 
-> Released: 2025-01-20
+> Released: 2025-01-28
 
 - Enhanced `New-RebuiltVsanDatastore` to handle VSAN_MAX clusters correctly
-- Added `New-RemountRemoteVsanDatastore` to map previously mounted remote vSAN datastore on compute only cluster
 
 ## v1.0.12
 
